@@ -1104,7 +1104,7 @@ table.tbl.lt.wide { min-width: 960px; }
     };
   }
   var samplePromise = (window.claude && typeof window.claude.use === 'function') ? window.claude.use('sample').catch(function () { return null; })
-    : (location.protocol === 'http:' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) ? Promise.resolve(localSample())
+    : (location.protocol === 'http:' || location.protocol === 'https:') ? Promise.resolve(localSample())
     : Promise.resolve(null);
 
   function errorCopy(code) {
@@ -1114,8 +1114,8 @@ table.tbl.lt.wide { min-width: 960px; }
       case 'refused': return 'Claude가 이 입력에는 답하지 못했어요. 표현을 바꿔서 다시 보내 주세요.';
       case 'empty_completion': return '답변이 비어 있었어요. 메시지를 조금 바꿔서 다시 보내 주세요.';
       case 'prompt_too_large': return '대화가 너무 길어졌어요. 새 대화를 시작해 주세요.';
-      case 'no_key': return '서버에서 API 키를 찾지 못했어요. .env 파일의 ANTHROPIC_API_KEY를 확인하고 서버를 다시 실행해 주세요.';
-      case 'bad_key': return 'API 키가 올바르지 않거나 사용 권한이 없어요. .env의 키와 크레딧 잔액을 확인해 주세요.';
+      case 'no_key': return '서버에서 API 키를 찾지 못했어요. 로컬은 .env의 ANTHROPIC_API_KEY, Firebase 배포는 시크릿 설정을 확인해 주세요.';
+      case 'bad_key': return 'API 키가 올바르지 않거나 사용 권한이 없어요. 키와 크레딧 잔액을 확인해 주세요.';
       case 'network': return '서버나 Claude에 연결하지 못했어요. 터미널에서 서버가 실행 중인지 확인해 주세요.';
       default: return '답변을 가져오는 중 문제가 생겼어요. 같은 메시지를 다시 보내 주세요.';
     }

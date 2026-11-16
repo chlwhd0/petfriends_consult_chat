@@ -1,0 +1,10 @@
+{
+  "name": "petfriends-chat-functions",
+  "private": true,
+  "description": "펫프렌즈 상담 챗봇의 Claude 호출 중계 함수",
+  "main": "index.js",
+  "engines": { "node": "22" },
+  "dependencies": {
+    "firebase-functions": "^7.4.0"
+  }
+}

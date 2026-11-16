@@ -4,7 +4,7 @@
 펫프렌즈(m.pet-friends.co.kr) 모바일 페이지용 상담 채팅형 UX/UI 프로토타입. 모든 상품·주문 데이터는 임의로 만든 시험용 데이터이며 실제 서비스와 연동되지 않는다.
 
 ## 파일
-- `petfriends_consult_chat.html`: 단일 파일(HTML + CSS + JS, 약 85KB). 빌드 과정과 외부 의존성이 없다.
+- `public/index.html`(예전 이름 `petfriends_consult_chat.html`): 단일 파일(HTML + CSS + JS, 약 85KB). 빌드 과정과 외부 의존성이 없다.
 - claude.ai 원본 아티팩트: https://claude.ai/artifact/C5idPrRTmEFCnmgAohZ5c9 (이 파일과 동일한 최신본)
 
 ## 화면 구성
@@ -58,6 +58,12 @@
 ## 주문·접수번호 형식 (2026-11-16 변경)
 - 주문번호는 `PF-MMDD-NN`(예: `PF-1116-01`), 접수번호는 `RT-MMDD-NN`/`EX-MMDD-NN`으로 줄였다. 예전 `PF-20261116-001` 형식은 번호 입력 인식(`normId`)과 저장 데이터 불러오기(`shortenIds`) 둘 다에서 자동으로 짧은 형식으로 바뀐다. 입력은 `pf11161`, `PF-1116-001`처럼 흐트러져도 인식한다.
 - 새 번호는 기준일의 월일 + 그날의 순번(2자리)이다. 시드 주문은 01~09 순번을 그대로 쓴다.
+
+## Firebase 배포 구조 (2026-11-16 추가, 아직 배포 전)
+- 화면은 `public/index.html`(Hosting이 서비스), 로컬 `server.js`도 이 파일을 읽는다. 배포 주소(https)에서도 화면은 `/api/chat`을 호출한다(claude.ai 안에서는 기존 `window.claude` 방식).
+- `firebase.json`이 `/api/chat`을 Cloud Functions `chat`(서울, `functions/index.js`)으로 보낸다. 함수는 server.js와 같은 일을 하며, 키는 Secret Manager의 `ANTHROPIC_API_KEY`를 쓰고, IP당 분당 10회·하루 120회 제한, 요청 크기·답변 길이 제한, 최대 3대(`maxInstances`)를 건다. 답변이 잘리면 같은 표시(`\u0001CUT`)를 보낸다.
+- 배포 절차는 `DEPLOY.md`. 로그인, Blaze 업그레이드, 시크릿 입력은 사용자가 직접 해야 한다. `.firebaserc`(프로젝트 연결)는 아직 없다.
+- 확인: 함수는 가짜 요청 하네스로 검증(405·400·413, 정상 스트림, 분당 한도 429, 키 오류 401). 실제 Firebase 배포와 배포 환경의 Claude 호출은 확인하지 못했다.
 
 ## 검증 상태
 - jsdom으로 확인함: 상품 버튼 10개 중 1개(P4, 품절) 비활성화, 카드 열기, 수량 변경 시 금액 계산, 주문 완료, 재고 차감(24 → 21), `localStorage` 저장.

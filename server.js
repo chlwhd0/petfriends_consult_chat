@@ -9,7 +9,7 @@ const MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-5-5';
 const KEY = process.env.ANTHROPIC_API_KEY;
 const MAX_TOKENS = Number(process.env.MAX_TOKENS) || 4096; // 한국어는 글자당 토큰이 많아 넉넉히 둔다
 const CUT_MARK = '\u0001CUT'; // 길이 제한으로 잘렸을 때 화면에 알리는 표시
-const HTML = path.join(__dirname, 'petfriends_consult_chat.html');
+const HTML = path.join(__dirname, 'public', 'index.html');
 
 function sendJson(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
