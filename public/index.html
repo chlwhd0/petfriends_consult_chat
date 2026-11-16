@@ -366,9 +366,12 @@ table.tbl.lt.wide { min-width: 960px; }
   .tbl tr.emp td { display: block; }
   .pager { justify-content: center; }
 }
+.saved.bad { color: var(--bad); }
+.boot { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); color: var(--ink-soft); font-size: 14px; z-index: 60; }
 </style>
 </head>
 <body>
+<div class="boot" id="boot" role="status">불러오는 중…</div>
 <div class="app" id="app">
 
   <section class="view" id="chatView">
@@ -419,6 +422,7 @@ table.tbl.lt.wide { min-width: 960px; }
           <button class="tab" role="tab" data-t="log" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>대화·피드백</span><span class="tb" hidden></span></button>
         </nav>
         <div class="adm-actions">
+          <button class="pill" id="admRefresh" type="button" hidden>서버에서 새로고침</button>
           <button class="pill" id="admChat" type="button">채팅 보기</button>
           <button class="pill danger" id="admReset" type="button">데이터 초기화</button>
           <button class="pill" id="admOut" type="button">로그아웃</button>
@@ -433,7 +437,7 @@ table.tbl.lt.wide { min-width: 960px; }
 </div>
 
 <script>
-(function () {
+(async function () {
   var ADMIN_PW = 'admin';
   var KEY = 'pf_proto_v1';
   var STATUS = ['결제완료', '상품준비중', '배송중', '배송완료', '취소', '반품요청', '반품완료', '교환요청', '교환완료'];
@@ -487,15 +491,153 @@ table.tbl.lt.wide { min-width: 960px; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   /* 예전 긴 번호(PF-20261116-001, RT-…, EX-…)를 짧은 번호(PF-1116-01)로 바꾼다 */
   function shortenIds(str) { return str.replace(/\b(PF|RT|EX)-\d{4}(\d{4})-(\d{3})\b/g, function (m, p, md, n) { return p + '-' + md + '-' + String(Number(n)).padStart(2, '0'); }); }
+  /* ---------- 저장소: Firebase(Firestore) 우선, 연결하지 못하면 이 브라우저(localStorage) ---------- */
+  var FBCFG = { apiKey: "AIzaSyA81Z5_XwSS2aLtTKs5UUuMtjoQA7GVE0g", authDomain: "petfriends-consult-chat-8a7cd.firebaseapp.com", projectId: "petfriends-consult-chat-8a7cd", storageBucket: "petfriends-consult-chat-8a7cd.firebasestorage.app", messagingSenderId: "617649327387", appId: "1:617649327387:web:74876dcf69e49dd16597be" };
+  var FB = null;                                   /* 연결되면 { f: firestore 모듈, db, uid } */
+  var SYNC = { snap: {}, timer: null, chain: Promise.resolve(), err: false, needSeed: false };
+  function snapOf(c) { return SYNC.snap[c] || (SYNC.snap[c] = {}); }
+  function canon(v) { /* 키 순서와 관계없이 같은 문자열이 나오게 만든다 */
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined; }).map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  function withTimeout(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error('시간 초과')); }, ms); })]); }
+  async function fbConnect() {
+    try {
+      var V = 'https://www.gstatic.com/firebasejs/10.14.1/';
+      var m = await withTimeout(Promise.all([import(V + 'firebase-app.js'), import(V + 'firebase-auth.js'), import(V + 'firebase-firestore.js')]), 10000);
+      var app = m[0].initializeApp(FBCFG), auth = m[1].getAuth(app);
+      await withTimeout(new Promise(function (res, rej) { var off = m[1].onAuthStateChanged(auth, function (u) { if (u) { off(); res(u); } }); m[1].signInAnonymously(auth).catch(rej); }), 10000);
+      return { f: m[2], db: m[2].getFirestore(app), uid: auth.currentUser.uid };
+    } catch (e) { console.warn('Firebase에 연결하지 못해 이 브라우저에 저장합니다.', e); return null; }
+  }
+  async function fbAll(c, q) { var sn = await FB.f.getDocs(q || FB.f.collection(FB.db, c)); return sn.docs.map(function (d) { return d.data(); }); }
+  async function fbLoad(admin) { /* 서버의 최신 데이터. 관리자일 때만 신고·대화 기록까지 */
+    var F = FB.f, db = FB.db;
+    var r = await Promise.all([fbAll('products'), fbAll('orders'), fbAll('requests'), fbAll('feedback'), F.getDoc(F.doc(db, 'settings', 'main')), F.getDoc(F.doc(db, 'settings', 'guide'))]);
+    var out = { products: r[0], orders: r[1], requests: r[2], feedback: r[3], settings: r[4].exists() ? r[4].data() : null, guide: r[5].exists() ? (r[5].data().text || '') : '' };
+    if (admin) {
+      out.reports = await fbAll('reports');
+      out.sessions = await fbAll('chatSessions', F.query(F.collection(db, 'chatSessions'), F.orderBy('startedAt', 'desc'), F.limit(100)));
+    }
+    return out;
+  }
+  function fbMark(c, arr) { var sn = SYNC.snap[c] = {}; arr.forEach(function (o) { sn[o.id] = canon(o); }); }
+  function numId(a, b) { return (Number(String(a.id).replace(/\D/g, '')) || 0) - (Number(String(b.id).replace(/\D/g, '')) || 0); }
+  function ordSort(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : (a.id < b.id ? 1 : -1); }
+  function applyLoaded(d, admin) { /* 불러온 서버 데이터로 화면 메모리를 바꾼다 */
+    DB.products = d.products.sort(numId); DB.orders = d.orders.sort(ordSort); DB.requests = d.requests.sort(function (a, b) { return a.id < b.id ? 1 : -1; });
+    if (d.settings) DB.settings = { today: d.settings.today || '2026-11-16' };
+    CH.feedback = d.feedback; CH.guide = d.guide;
+    fbMark('products', DB.products); fbMark('orders', DB.orders); fbMark('requests', DB.requests); fbMark('feedback', CH.feedback);
+    fbMark('settings', [{ id: 'main', today: DB.settings.today }, { id: 'guide', text: CH.guide }]);
+    if (admin) { CH.reports = d.reports; CH.sessions = d.sessions; fbMark('reports', CH.reports); fbMark('chatSessions', CH.sessions); }
+  }
+  function fieldChanges(prevJson, obj, F) { /* 바뀐 필드만 보낸다. 재고는 증감분(increment)으로 보내 동시 주문에도 맞게 */
+    var prev = JSON.parse(prevJson), out = {}, o = JSON.parse(JSON.stringify(obj));
+    Object.keys(o).forEach(function (k) {
+      if (canon(o[k]) === canon(prev[k])) return;
+      out[k] = (k === 'stock' && typeof o[k] === 'number' && typeof prev[k] === 'number') ? F.increment(o[k] - prev[k]) : o[k];
+    });
+    Object.keys(prev).forEach(function (k) { if (!(k in o)) out[k] = F.deleteField(); });
+    return out;
+  }
+  function fbError(on) {
+    var sv = document.getElementById('saved'); if (!sv) return;
+    sv.classList.toggle('bad', !!on); if (on) { sv.textContent = '서버 저장 실패, 다시 시도 중'; sv.classList.add('on'); } else sv.textContent = '저장됨';
+  }
+  async function fbFlush() { /* 서버와 달라진 문서만 모아서 저장 */
+    if (!FB) return;
+    var F = FB.f, db = FB.db, ops = [];
+    function col(c, arr) {
+      var snap = snapOf(c), cur = {};
+      arr.forEach(function (o) { cur[o.id] = o; });
+      Object.keys(cur).forEach(function (id) { var j = canon(cur[id]); if (snap[id] !== j) ops.push({ c: c, id: id, obj: cur[id], j: j, prev: snap[id] }); });
+      Object.keys(snap).forEach(function (id) { if (!(id in cur)) ops.push({ c: c, id: id, del: true }); });
+    }
+    col('products', DB.products); col('orders', DB.orders); col('requests', DB.requests);
+    col('feedback', CH.feedback); col('reports', CH.reports); col('chatSessions', CH.sessions);
+    col('settings', [{ id: 'main', today: DB.settings.today }, { id: 'guide', text: CH.guide }]);
+    if (!ops.length) return;
+    try {
+      for (var i = 0; i < ops.length; i += 400) {
+        var batch = F.writeBatch(db), chunk = ops.slice(i, i + 400);
+        chunk.forEach(function (op) {
+          var ref = F.doc(db, op.c, String(op.id));
+          if (op.del) batch.delete(ref);
+          else if (op.prev === undefined) batch.set(ref, JSON.parse(JSON.stringify(op.obj)));
+          else batch.set(ref, fieldChanges(op.prev, op.obj, F), { merge: true });
+        });
+        await batch.commit();
+        chunk.forEach(function (op) { var sn = snapOf(op.c); if (op.del) delete sn[op.id]; else sn[op.id] = op.j; });
+      }
+      if (SYNC.err) { SYNC.err = false; fbError(false); }
+    } catch (e) {
+      console.warn('서버 저장 실패', e); SYNC.err = true; fbError(true);
+      clearTimeout(SYNC.timer); SYNC.timer = setTimeout(fbSchedule, 5000);
+    }
+  }
+  function fbSchedule() { if (!FB) return; clearTimeout(SYNC.timer); SYNC.timer = setTimeout(function () { SYNC.chain = SYNC.chain.then(fbFlush); }, 350); }
+  function fbFlushNow() { if (!FB) return Promise.resolve(); clearTimeout(SYNC.timer); SYNC.chain = SYNC.chain.then(fbFlush); return SYNC.chain; }
+  async function fbWipe(c) { /* 컬렉션의 문서를 모두 지운다 (대화 기록 삭제용) */
+    var F = FB.f, db = FB.db, sn = await F.getDocs(F.collection(db, c)), docs = sn.docs;
+    for (var i = 0; i < docs.length; i += 400) { var b = F.writeBatch(db); docs.slice(i, i + 400).forEach(function (d) { b.delete(d.ref); }); await b.commit(); }
+    SYNC.snap[c] = {};
+  }
+  async function fbFreeId(coll, prefix, from) { /* 서버에 없는 번호를 찾는다 */
+    var F = FB.f, n = parseInt(String(from).slice(prefix.length), 10) || 1, id;
+    for (; n < 300; n++) { id = prefix + String(n).padStart(2, '0'); if (!(await F.getDoc(F.doc(FB.db, coll, id))).exists()) return id; }
+    return from;
+  }
+  async function fbPlaceOrder(pid, qty, prefix, mk) { /* 재고 확인·차감과 주문 생성을 한 번에 (동시 주문에도 안전) */
+    var F = FB.f, db = FB.db;
+    return F.runTransaction(db, async function (tx) {
+      var pref = F.doc(db, 'products', pid), ps = await tx.get(pref);
+      if (!ps.exists()) return { ok: false, why: 'none' };
+      var stock = Number(ps.data().stock) || 0;
+      if (stock < qty) return { ok: false, why: 'stock', stock: stock };
+      var id, oref, i;
+      for (i = 1; i < 300; i++) { id = prefix + String(i).padStart(2, '0'); oref = F.doc(db, 'orders', id); if (!(await tx.get(oref)).exists()) break; }
+      var od = JSON.parse(JSON.stringify(mk(id)));
+      tx.set(oref, od); tx.update(pref, { stock: F.increment(-qty) });
+      return { ok: true, order: od, stock: stock - qty };
+    });
+  }
+  var lastSync = 0, syncing = false;
+  async function adminSync(force) { /* 관리자 화면: 서버 최신 데이터로 새로 고침 */
+    if (!FB || syncing || (!force && Date.now() - lastSync < 4000)) return;
+    syncing = true;
+    try {
+      await fbFlushNow(); applyLoaded(await withTimeout(fbLoad(true), 20000), true); lastSync = Date.now();
+      var ae = document.activeElement;
+      if (!(ae && ae.closest && ae.closest('#admBody') && /INPUT|TEXTAREA|SELECT/.test(ae.tagName))) renderAdmin();
+      else admAfterSave();
+    } catch (e) { console.warn('서버에서 불러오지 못했어요', e); fbError(true); } finally { syncing = false; }
+  }
+  async function chatSync() { /* 채팅 화면: 재고·주문·지침 최신화 */
+    if (!FB || syncing) return;
+    try { await fbFlushNow(); applyLoaded(await withTimeout(fbLoad(false), 15000), false); renderStrip(); } catch (e) { console.warn('서버에서 불러오지 못했어요', e); }
+  }
+  function storeWhere() { return FB ? '서버(Firebase)에 저장돼요. 여러 방문자의 대화가 모두 이곳에 모여요' : '이 브라우저(localStorage)에 저장돼요'; }
+
+  /* ---------- 데이터 ---------- */
+  var FBD = null;
+  FB = await fbConnect();
+  if (FB) { try { FBD = await withTimeout(fbLoad(false), 15000); } catch (e) { console.warn('서버에서 불러오지 못해 이 브라우저에 저장합니다.', e); FB = null; } }
   var DB;
-  try { var raw = localStorage.getItem(KEY); DB = raw ? JSON.parse(shortenIds(raw)) : null; } catch (e) { DB = null; }
-  if (!DB || !DB.products || !DB.orders) DB = clone(SEED);
-  if (!DB.requests) DB.requests = clone(SEED.requests);
-  if (!DB.settings) DB.settings = clone(SEED.settings);
-  SEED.orders.forEach(function (o) { if (o.id === 'PF-1104-09' && !DB.orders.some(function (x) { return x.id === o.id; })) DB.orders.push(clone(o)); });
+  if (FBD) {
+    if (FBD.settings) DB = { products: FBD.products.sort(numId), orders: FBD.orders.sort(ordSort), requests: FBD.requests.sort(function (a, b) { return a.id < b.id ? 1 : -1; }), settings: { today: FBD.settings.today || '2026-11-16' } };
+    else { DB = clone(SEED); SYNC.needSeed = true; } /* 서버가 비어 있으면 처음 데이터로 채운다 */
+  } else {
+    try { var raw = localStorage.getItem(KEY); DB = raw ? JSON.parse(shortenIds(raw)) : null; } catch (e) { DB = null; }
+    if (!DB || !DB.products || !DB.orders) DB = clone(SEED);
+    if (!DB.requests) DB.requests = clone(SEED.requests);
+    if (!DB.settings) DB.settings = clone(SEED.settings);
+    SEED.orders.forEach(function (o) { if (o.id === 'PF-1104-09' && !DB.orders.some(function (x) { return x.id === o.id; })) DB.orders.push(clone(o)); });
+  }
   var savedTimer = null;
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (e) {}
+    if (FB) fbSchedule(); else { try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch (e) {} }
     admAfterSave();
     var s = document.getElementById('saved'); s.classList.add('on');
     clearTimeout(savedTimer); savedTimer = setTimeout(function () { s.classList.remove('on'); }, 1400);
@@ -577,7 +719,7 @@ table.tbl.lt.wide { min-width: 960px; }
     Object.keys(VIEWS).forEach(function (k) { document.getElementById(VIEWS[k]).hidden = k !== v; });
     document.getElementById('app').className = 'app' + (v === 'admin' ? ' wide' : '');
     if (v === 'chat') { renderStrip(); if (typeof autosize === 'function' && input) autosize(); }
-    if (v === 'admin') renderAdmin();
+    if (v === 'admin') { renderAdmin(); adminSync(true); }
     if (v === 'login') { document.getElementById('pwErr').textContent = ''; document.getElementById('pwIn').value = ''; document.getElementById('pwIn').focus(); }
   }
 
@@ -593,24 +735,32 @@ table.tbl.lt.wide { min-width: 960px; }
   /* ---------- 대화 기록·관리자 피드백 (localStorage, 별도 키) ---------- */
   var CKEY = 'pf_proto_chat_v1';
   var CH = { sessions: [], feedback: [], guide: '', reports: [] };
-  try {
-    var cr = localStorage.getItem(CKEY), cj = cr ? JSON.parse(cr) : null;
-    if (cj) {
-      if (Array.isArray(cj.sessions)) CH.sessions = cj.sessions.filter(function (x) { return x && Array.isArray(x.entries); });
-      if (Array.isArray(cj.feedback)) CH.feedback = cj.feedback.filter(function (x) { return x && x.id; });
-      if (typeof cj.guide === 'string') CH.guide = cj.guide;
-      if (Array.isArray(cj.reports)) CH.reports = cj.reports.filter(function (x) { return x && x.id; });
-    }
-  } catch (e) {}
+  if (FBD) {
+    CH.feedback = FBD.feedback; CH.guide = FBD.guide;
+    if (FBD.settings) { fbMark('products', DB.products); fbMark('orders', DB.orders); fbMark('requests', DB.requests); fbMark('feedback', CH.feedback); fbMark('settings', [{ id: 'main', today: DB.settings.today }, { id: 'guide', text: CH.guide }]); }
+  } else {
+    try {
+      var cr = localStorage.getItem(CKEY), cj = cr ? JSON.parse(cr) : null;
+      if (cj) {
+        if (Array.isArray(cj.sessions)) CH.sessions = cj.sessions.filter(function (x) { return x && Array.isArray(x.entries); });
+        if (Array.isArray(cj.feedback)) CH.feedback = cj.feedback.filter(function (x) { return x && x.id; });
+        if (typeof cj.guide === 'string') CH.guide = cj.guide;
+        if (Array.isArray(cj.reports)) CH.reports = cj.reports.filter(function (x) { return x && x.id; });
+      }
+    } catch (e) {}
+  }
   var MAX_SESS = 100;
   function uid(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
   function stampNow() { var d = new Date(), z = function (n) { return String(n).padStart(2, '0'); }; return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); }
   function flashSaved() { admAfterSave(); var sv = document.getElementById('saved'); if (!sv) return; sv.classList.add('on'); clearTimeout(savedTimer); savedTimer = setTimeout(function () { sv.classList.remove('on'); }, 1400); }
   function saveChat() {
     if (CH.sessions.length > MAX_SESS) CH.sessions.length = MAX_SESS;
-    for (var n = 0; n < 60; n++) {
-      try { localStorage.setItem(CKEY, JSON.stringify(CH)); break; }
-      catch (e) { if (CH.sessions.length > 1) CH.sessions.pop(); else break; } /* 저장 공간이 모자라면 가장 오래된 대화부터 지움 */
+    if (FB) fbSchedule();
+    else {
+      for (var n = 0; n < 60; n++) {
+        try { localStorage.setItem(CKEY, JSON.stringify(CH)); break; }
+        catch (e) { if (CH.sessions.length > 1) CH.sessions.pop(); else break; } /* 저장 공간이 모자라면 가장 오래된 대화부터 지움 */
+      }
     }
     flashSaved();
   }
@@ -917,7 +1067,7 @@ table.tbl.lt.wide { min-width: 960px; }
       update();
     });
     card.addEventListener('input', function (e) { if (e.target.classList.contains('rc-detail')) { f.detail = e.target.value; update(); } });
-    card.addEventListener('click', function (e) {
+    card.addEventListener('click', async function (e) {
       var b = e.target.closest('button'); if (!b) return;
       if (b.hasAttribute('data-ty')) { f.type = b.getAttribute('data-ty'); update(); return; }
       if (b.hasAttribute('data-close')) { card.remove(); delete S.openForms[o.id]; addNote('접수 카드를 닫았어요. 다시 접수하려면 ‘반품 접수’ 또는 ‘교환 접수’라고 말씀해 주세요.'); return; }
@@ -927,6 +1077,7 @@ table.tbl.lt.wide { min-width: 960px; }
         if (!ex.ok) { addNote('접수할 수 없어요. ' + ex.msg); card.remove(); delete S.openForms[o.id]; return; }
         var d = new Date(), ymd = todayStr().slice(5).replace('-', ''), pre = f.type === '반품' ? 'RT' : 'EX', n = 1, rid;
         do { rid = pre + '-' + ymd + '-' + String(n).padStart(2, '0'); n++; } while (reqById(rid));
+        if (FB) { try { rid = await fbFreeId('requests', pre + '-' + ymd + '-', rid); } catch (e2) {} }
         var req = calcReq({ id: rid, type: f.type, orderId: o.id, items: cur, reason: f.reason, detail: f.detail.trim(), pickup: f.pickup, status: '접수', createdAt: nowStamp(), memo: '', history: [{ t: nowStamp(), d: f.type + ' 접수' }] });
         DB.requests.unshift(req);
         logEntry('sys', f.type + ' 접수 ' + rid + ' · 주문 ' + live.id);
@@ -980,19 +1131,41 @@ table.tbl.lt.wide { min-width: 960px; }
         var qty = update(); if (b.disabled) return;
         var live = prod(p.id);
         if (!live || live.stock < qty) { renderStrip(); return; }
+        var ymd = todayStr().slice(5).replace('-', '');
+        var mk = function (oid) { return { id: oid, name: '홍*동', date: todayStr(), status: '결제완료', items: [{ pid: live.id, qty: qty }], carrier: '', tracking: '', events: [{ t: nowStamp(), d: '결제 완료' }] }; };
+        var finish = function (no) {
+          var oid = no.id;
+          renderStrip();
+          card.replaceWith(orderCard(no)); delete S.openForms[key];
+          S.lastOrder = oid;
+          logEntry('sys', '주문 완료 ' + oid + ' · ' + live.name + ' ' + qty + '개 · ' + won(total(no)));
+          var bb = newBot();
+          setBody(bb.body, '주문이 완료됐어요. 주문번호는 ' + oid + ' 이에요.\n\n' + live.name + ' ' + qty + '개, 결제금액 ' + won(total(no)) + '이에요. 결제 후 평일 기준 1일 이내 출고되고, 주문번호로 배송 상태를 언제든 물어보실 수 있어요.' + (live.stock <= 0 ? '\n\n이 상품은 방금 주문으로 재고가 모두 소진돼 품절 처리됐어요.' : ''));
+          scroll();
+          refreshChips();
+        };
+        if (FB) { /* 서버에서 재고 확인·차감과 주문 생성을 한 번에 처리 */
+          b.disabled = true;
+          fbPlaceOrder(live.id, qty, 'PF-' + ymd + '-', mk).then(function (r) {
+            if (!r.ok) {
+              b.disabled = false;
+              if (r.why === 'stock') { live.stock = r.stock; renderStrip(); addNote('방금 재고가 줄었어요. 남은 재고는 ' + r.stock + '개예요. 수량을 줄여 다시 주문해 주세요.'); update(); }
+              else addNote('이 상품은 지금 주문할 수 없어요.');
+              return;
+            }
+            live.stock = r.stock; DB.orders.unshift(r.order);
+            snapOf('orders')[r.order.id] = canon(r.order); snapOf('products')[live.id] = canon(live);
+            finish(r.order);
+          }).catch(function (e3) { console.warn(e3); b.disabled = false; addNote('주문을 처리하지 못했어요. 잠시 뒤 다시 시도해 주세요.'); });
+          return;
+        }
         live.stock = Math.max(0, live.stock - qty);
-        var ymd = todayStr().slice(5).replace('-', ''), n = 1, oid;
+        var n = 1, oid;
         do { oid = 'PF-' + ymd + '-' + String(n).padStart(2, '0'); n++; } while (order(oid));
-        var no = { id: oid, name: '홍*동', date: todayStr(), status: '결제완료', items: [{ pid: live.id, qty: qty }], carrier: '', tracking: '', events: [{ t: nowStamp(), d: '결제 완료' }] };
+        var no = mk(oid);
         DB.orders.unshift(no);
-        save(); renderStrip();
-        card.replaceWith(orderCard(no)); delete S.openForms[key];
-        S.lastOrder = oid;
-        logEntry('sys', '주문 완료 ' + oid + ' · ' + live.name + ' ' + qty + '개 · ' + won(total(no)));
-        var bb = newBot();
-        setBody(bb.body, '주문이 완료됐어요. 주문번호는 ' + oid + ' 이에요.\n\n' + live.name + ' ' + qty + '개, 결제금액 ' + won(total(no)) + '이에요. 결제 후 평일 기준 1일 이내 출고되고, 주문번호로 배송 상태를 언제든 물어보실 수 있어요.' + (live.stock <= 0 ? '\n\n이 상품은 방금 주문으로 재고가 모두 소진돼 품절 처리됐어요.' : ''));
-        scroll();
-        refreshChips();
+        save();
+        finish(no);
       }
     });
     update();
@@ -1196,7 +1369,7 @@ table.tbl.lt.wide { min-width: 960px; }
   input.addEventListener('input', function () { autosize(); updateSend(); });
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
   sendBtn.addEventListener('click', function () { if (S.busy && S.ctl) { S.ctl.abort(); return; } submit(); });
-  document.getElementById('newChat').addEventListener('click', startChat);
+  document.getElementById('newChat').addEventListener('click', function () { chatSync(); startChat(); });
   document.getElementById('stripToggle').addEventListener('click', function () {
     var s = document.getElementById('strip'); s.hidden = !s.hidden;
     this.setAttribute('aria-expanded', s.hidden ? 'false' : 'true');
@@ -1419,7 +1592,7 @@ table.tbl.lt.wide { min-width: 960px; }
     refreshKpis(); var m = document.getElementById('admMeta'); if (m) m.textContent = admMeta(A.tab); updateTabBadge();
   }
   document.getElementById('admTabs').addEventListener('click', function (e) {
-    var b = e.target.closest('.tab'); if (!b) return; A.tab = b.getAttribute('data-t'); renderAdmin(); document.getElementById('admBody').scrollTop = 0;
+    var b = e.target.closest('.tab'); if (!b) return; A.tab = b.getAttribute('data-t'); renderAdmin(); document.getElementById('admBody').scrollTop = 0; adminSync();
   });
   var admBody = document.getElementById('admBody');
   admBody.addEventListener('change', function (e) {
@@ -1527,7 +1700,7 @@ table.tbl.lt.wide { min-width: 960px; }
   function rating(f) { return f.rating === 'good' ? '<span class="badge b-ok">좋았어요</span>' : f.rating === 'bad' ? '<span class="badge b-bad">아쉬워요</span>' : '<span class="badge">코멘트</span>'; }
 
   LISTS.log = {
-    sort: 'at', dir: -1, ph: '질문·답변 내용 검색', hint: '고객과의 대화가 이 브라우저(localStorage)에 모두 저장돼요. 행의 "상세"를 누르면 대화 전체와 챗봇이 받은 정보를 보고, 답변마다 피드백을 남길 수 있어요.',
+    sort: 'at', dir: -1, ph: '질문·답변 내용 검색', hint: '고객과의 대화가 ' + storeWhere() + '. 행의 "상세"를 누르면 대화 전체와 챗봇이 받은 정보를 보고, 답변마다 피드백을 남길 수 있어요.',
     rows: function () { return CH.sessions; }, id: function (cs) { return cs.id; },
     kpis: [{ key: 'all', label: '전체 대화', tone: 'info' }, { key: 'rep', label: '신고 포함 대화', tone: 'warn', fn: function (cs) { return sessInfo(cs).rep > 0; } }, { key: 'fed', label: '피드백 남긴 대화', tone: 'ok', fn: function (cs) { return sessInfo(cs).fb > 0; } }, { key: 'cut', label: '잘림·중단 포함', tone: 'bad', fn: function (cs) { return sessInfo(cs).cut; } }],
     filters: [],
@@ -1624,7 +1797,7 @@ table.tbl.lt.wide { min-width: 960px; }
     var ca = e.target.closest('[data-fba]');
     if (ca) {
       if (!A.clr) { A.clr = true; clearTimeout(clrTimer); clrTimer = setTimeout(function () { A.clr = false; if (A.tab === 'log') renderAdmin(); }, 3000); renderAdmin(); return; }
-      clearTimeout(clrTimer); A.clr = false; CH.sessions = []; S.sid = null; saveChat(); renderAdmin(); return;
+      clearTimeout(clrTimer); A.clr = false; CH.sessions = []; S.sid = null; saveChat(); if (FB) fbWipe('chatSessions').catch(function () { fbError(true); }); renderAdmin(); return;
     }
     var rb = e.target.closest('button[data-rp]');
     if (rb) {
@@ -1695,8 +1868,12 @@ table.tbl.lt.wide { min-width: 960px; }
   });
 
   updateTabBadge();
+  if (SYNC.needSeed) fbSchedule();
+  var bs = document.querySelector('.adm-brand small'); if (bs) bs.textContent = FB ? '클라우드 저장 (Firebase)' : '이 브라우저에 저장';
+  var rf = document.getElementById('admRefresh'); if (rf) rf.hidden = !FB;
   startChat();
-})();
+  var bt = document.getElementById('boot'); if (bt) bt.remove();
+})().catch(function (e) { console.error(e); var bt = document.getElementById('boot'); if (bt) bt.textContent = '불러오지 못했어요. 새로고침해 주세요.'; });
 </script>
 </body>
 </html>

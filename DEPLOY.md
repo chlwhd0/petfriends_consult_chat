@@ -59,8 +59,19 @@ npx -y firebase-tools@15 deploy --only functions,hosting
 
 ## 알아 둘 점
 - 관리자 화면 비밀번호(`admin`)는 화면 파일 안에 있어 누구나 볼 수 있습니다. 실제 보안 기능이 아닙니다.
-- 대화 기록, 피드백, 주문 데이터는 **방문자 각자의 브라우저**에 저장됩니다. 관리자가 다른 사람의 대화를 볼 수는 없습니다.
+- 상품·주문·접수·대화 기록·피드백·신고는 **Firestore(서울)** 에 저장되어 모든 방문자와 관리자가 같은 데이터를 봅니다. 아래 "데이터 저장(Firestore)" 참고.
+- 관리자 비밀번호가 화면 파일에 있는 구조라, 로그인한 방문자(익명 로그인)는 개발자 도구로 모든 기록을 읽고 쓸 수 있습니다(규칙은 값의 형태와 크기만 검증합니다). 개인정보가 섞일 수 있는 대화 기록을 보호하려면 관리자 로그인을 Google 로그인 등으로 바꾸고 규칙을 관리자 전용으로 좁혀야 합니다.
 - 답변은 Hosting을 거치며 한 번에 도착할 수도 있습니다(글자가 흐르는 효과가 약해질 수 있음).
+
+## 데이터 저장(Firestore) 준비
+화면(`public/index.html`)은 방문자마다 Firebase **익명 로그인**을 한 뒤 Firestore에 읽고 씁니다. 연결에 실패하면 예전처럼 브라우저(localStorage)에 저장합니다.
+1. **Authentication 시작과 익명 로그인 사용 설정**: Firebase 콘솔 → 빌드 → Authentication → 시작하기 → Sign-in method → 익명 → 사용 설정 (콘솔에서만 가능)
+2. 데이터베이스 만들기(서울): `npx -y firebase-tools@15 firestore:databases:create "(default)" --location asia-northeast3 --project 내-프로젝트-id`
+3. 규칙 배포: `npx -y firebase-tools@15 deploy --only firestore --project 내-프로젝트-id` (`firestore.rules`)
+4. 화면 배포: `npx -y firebase-tools@15 deploy --only hosting --project 내-프로젝트-id`
+5. 처음 접속하면 서버가 비어 있을 때 화면이 처음 데이터(SEED)를 자동으로 채웁니다.
+
+화면 파일 안의 Firebase 웹 설정(`FBCFG`)은 공개되어도 되는 값입니다. 프로젝트를 바꾸면 이 값을 새 웹 앱의 설정으로 바꿔야 합니다(`firebase apps:sdkconfig web`).
 
 ## 문제 해결
 - `Blaze` 관련 오류: 2단계의 요금제 업그레이드가 안 된 것입니다.

@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function str(d, k, n) { return d.get(k, '') is string && d.get(k, '').size() <= n; }
+    function num(d, k) { return d.get(k, 0) is int && d.get(k, 0) >= 0 && d.get(k, 0) <= 100000000; }
+    function arr(d, k, n) { return d.get(k, []) is list && d.get(k, []).size() <= n; }
+    function few(d, n) { return d.keys().size() <= n; }
+
+    match /settings/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && id in ['main', 'guide'] && few(request.resource.data, 6)
+        && str(request.resource.data, 'today', 10) && str(request.resource.data, 'text', 5000);
+      allow delete: if signedIn();
+    }
+
+    match /products/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 20)
+        && str(request.resource.data, 'id', 30) && str(request.resource.data, 'name', 200) && str(request.resource.data, 'cat', 30)
+        && str(request.resource.data, 'restock', 10) && num(request.resource.data, 'price') && num(request.resource.data, 'sale')
+        && num(request.resource.data, 'stock') && arr(request.resource.data, 'kw', 20);
+      allow delete: if signedIn();
+    }
+
+    match /orders/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 20)
+        && str(request.resource.data, 'id', 40) && str(request.resource.data, 'name', 60) && str(request.resource.data, 'date', 10)
+        && str(request.resource.data, 'status', 20) && str(request.resource.data, 'carrier', 60) && str(request.resource.data, 'tracking', 60)
+        && arr(request.resource.data, 'items', 50) && arr(request.resource.data, 'events', 200);
+      allow delete: if signedIn();
+    }
+
+    match /requests/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 30)
+        && str(request.resource.data, 'id', 40) && str(request.resource.data, 'type', 10) && str(request.resource.data, 'orderId', 40)
+        && str(request.resource.data, 'reason', 100) && str(request.resource.data, 'detail', 1000) && str(request.resource.data, 'pickup', 100)
+        && str(request.resource.data, 'status', 20) && str(request.resource.data, 'createdAt', 20) && str(request.resource.data, 'memo', 1000)
+        && arr(request.resource.data, 'items', 50) && arr(request.resource.data, 'history', 200);
+      allow delete: if signedIn();
+    }
+
+    match /chatSessions/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 10)
+        && str(request.resource.data, 'id', 60) && str(request.resource.data, 'startedAt', 20) && arr(request.resource.data, 'entries', 600);
+      allow delete: if signedIn();
+    }
+
+    match /feedback/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 20)
+        && str(request.resource.data, 'id', 60) && str(request.resource.data, 'eid', 60) && str(request.resource.data, 'sid', 60)
+        && str(request.resource.data, 'q', 3000) && str(request.resource.data, 'a', 3000) && str(request.resource.data, 'note', 3000)
+        && str(request.resource.data, 'ideal', 3000) && str(request.resource.data, 'at', 20);
+      allow delete: if signedIn();
+    }
+
+    match /reports/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && few(request.resource.data, 20)
+        && str(request.resource.data, 'id', 60) && str(request.resource.data, 'eid', 60) && str(request.resource.data, 'sid', 60)
+        && str(request.resource.data, 'q', 3000) && str(request.resource.data, 'a', 3000) && str(request.resource.data, 'reason', 100)
+        && str(request.resource.data, 'detail', 1000) && str(request.resource.data, 'status', 20) && str(request.resource.data, 'memo', 3000)
+        && str(request.resource.data, 'at', 20);
+      allow delete: if signedIn();
+    }
+  }
+}

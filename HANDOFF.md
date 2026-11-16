@@ -59,6 +59,14 @@
 - 주문번호는 `PF-MMDD-NN`(예: `PF-1116-01`), 접수번호는 `RT-MMDD-NN`/`EX-MMDD-NN`으로 줄였다. 예전 `PF-20261116-001` 형식은 번호 입력 인식(`normId`)과 저장 데이터 불러오기(`shortenIds`) 둘 다에서 자동으로 짧은 형식으로 바뀐다. 입력은 `pf11161`, `PF-1116-001`처럼 흐트러져도 인식한다.
 - 새 번호는 기준일의 월일 + 그날의 순번(2자리)이다. 시드 주문은 01~09 순번을 그대로 쓴다.
 
+## 저장소를 Firestore로 이전 (2026-11-16)
+- 이제 모든 상태가 Firestore(서울, 프로젝트 `petfriends-consult-chat-8a7cd`)에 저장된다. 컬렉션: `products`, `orders`, `requests`, `settings`(`main`=기준일, `guide`=공통 지침), `chatSessions`, `feedback`, `reports`. 위의 `localStorage` 설명(`pf_proto_v1`, `pf_proto_chat_v1`)은 **연결 실패 때의 대체 경로**로만 남아 있다.
+- 구조(`public/index.html`): 화면은 예전처럼 메모리의 `DB`·`CH`를 쓰고, `save()`/`saveChat()`가 `fbSchedule()`로 350ms 뒤 `fbFlush()`를 돌려 서버와 달라진 문서만 쓴다(`canon`으로 비교, 바뀐 필드만 `merge`, 재고는 `increment` 증감분). 시작은 `fbConnect()`(익명 로그인) → `fbLoad()`. 서버가 비어 있으면 `SEED`로 채운다(`SYNC.needSeed`).
+- 주문은 `fbPlaceOrder()` 트랜잭션(재고 확인·차감·주문번호 부여를 한 번에), 접수번호는 `fbFreeId()`로 서버에 없는 번호를 고른다. 관리자 화면은 열 때·메뉴 전환 때·"서버에서 새로고침"에서 `adminSync()`로 최신 데이터를 불러온다(입력 중이면 다시 그리지 않음). 채팅 화면은 "새 대화" 때 `chatSync()`.
+- 규칙(`firestore.rules`): 익명 로그인한 사용자만 읽고 쓰며, 문서마다 필드 길이·형식·개수를 검증한다. 관리자 비밀번호가 클라이언트(`admin`)라서 규칙으로 관리자를 구분하지 못한다. 즉 방문자도 개발자 도구로 모든 기록을 읽고 쓸 수 있다. 관리자를 Google 로그인으로 바꾸면 규칙을 좁힐 수 있다.
+- 확인(실제 프로젝트): 새 방문자(저장소 전체 삭제)로 열어도 서버 값이 보임, 주문 후 서버 재고·주문 반영, 다른 방문자가 재고를 0으로 만든 뒤 주문이 막힘, 접수 번호·주문 상태 반영, 대화·신고·피드백·공통 지침 저장과 다른 방문자에게 노출, 챗봇 요청에 서버 피드백 지침 포함, 삭제·초기화, 규칙 거부 8건(로그인 없음, 잘못된 형식, 음수, 과도한 길이 등). 관리자 로그인을 바꾼 경우의 동작은 확인하지 못했다.
+- 시험 중 쌓인 데이터는 관리자 "데이터 초기화"와 삭제 기능으로 정리했다(처음 데이터 상태).
+
 ## Firebase 배포 구조 (2026-11-16 추가, 아직 배포 전)
 - 화면은 `public/index.html`(Hosting이 서비스), 로컬 `server.js`도 이 파일을 읽는다. 배포 주소(https)에서도 화면은 `/api/chat`을 호출한다(claude.ai 안에서는 기존 `window.claude` 방식).
 - `firebase.json`이 `/api/chat`을 Cloud Functions `chat`(서울, `functions/index.js`)으로 보낸다. 함수는 server.js와 같은 일을 하며, 키는 Secret Manager의 `ANTHROPIC_API_KEY`를 쓰고, IP당 분당 10회·하루 120회 제한, 요청 크기·답변 길이 제한, 최대 3대(`maxInstances`)를 건다. 답변이 잘리면 같은 표시(`\u0001CUT`)를 보낸다.
